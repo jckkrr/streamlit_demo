@@ -1,15 +1,26 @@
-import pandas as pd
+## streamlit run "C:\Users\Jack\Documents\Python_projects\2023\streamlit\test.py"
+
+import plotly.express as px
 import streamlit as st
 
-import os
+df = px.data.gapminder()
 
-import random
-    
-df = pd.DataFrame(columns=['x','y'])
-x = [x for x in range(1,11)]
-power_n = st.slider('Power N', 0, 10, 1)
+fig = px.scatter(
+    df.query("year==2007"),
+    x="gdpPercap",
+    y="lifeExp",
+    size="pop",
+    color="continent",
+    hover_name="country",
+    log_x=True,
+    size_max=60,
+)
 
-df['x'] = x
-df['y'] = [x ** power_n for x in x]
-
-st.line_chart(df, x='x', y='y')
+tab1, tab2 = st.tabs(["Streamlit theme (default)", "Plotly native theme"])
+with tab1:
+    # Use the Streamlit theme.
+    # This is the default. So you can also omit the theme argument.
+    st.plotly_chart(fig, theme="streamlit", use_container_width=True)
+with tab2:
+    # Use the native Plotly theme.
+    st.plotly_chart(fig, theme=None, use_container_width=True)
