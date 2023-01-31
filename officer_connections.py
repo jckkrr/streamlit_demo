@@ -118,7 +118,7 @@ def getOfficerAppointments(officer_ids):
 
 def getCompanyPeople(company_numbers):
     
-    first_columns = ['name', 'person_type', 'officer_role', 'date_of_birth:year', 'date_of_birth:month', 'nationality', 'country_of_residence', 'occupation']
+    first_columns = ['name', 'company_name', 'nationality', 'country_of_residence', 'active', 'appointed_on', 'resigned_on', 'person_type', 'officer_role', 'date_of_birth:year', 'date_of_birth:month', 'company_number', 'officer_id']
     df = pd.DataFrame(columns=first_columns)
     
     for company_number in company_numbers:
@@ -168,7 +168,8 @@ def getCompanyPeople(company_numbers):
     df['officer_id'] = np.where(df['officer_id'].str.contains('appointments'), df['officer_id'].apply(lambda x: re.findall('/officers/(.*)/appointments', str(x))[0]), None)
     df['officer_id'] = np.where(df['officer_id']=='*****', None, df['officer_id'])
             
-    first_columns = ['name', 'company_name', 'nationality', 'country_of_residence', 'appointed_on', 'person_type', 'officer_role', 'date_of_birth:year', 'date_of_birth:month', 'company_number', 'officer_id']
+    df['active'] = np.where(df['appointed_on'].notnull() & df['resigned_on'].isnull(), 1, 0)
+            
     ordered_columns = [x for x in first_columns if x in df.columns] + [x for x in df.columns if x not in first_columns]    
     df = df[ordered_columns]
     
@@ -244,13 +245,20 @@ if len(api_key) > 10:
                     
                     node_name, node_company = row['name'], row['company_name']
                     
-                    node_size, name_node_color = 10, 'rgb(222,200,200)'
+                    node_size = 10
+                    
                     if row['officer_id'] in officer_ids:
                         node_size = 25
-                        name_node_color = 'rgb(200,200,0)'
+                        name_node_color = 'rgba(200, 200, 0, 0.8)'
+                    elif row['active'] == 1:
+                        name_node_color = 'rgba(200, 200, 222, 0.8)'
+                    elif row['active'] == 0:
+                        name_node_color = 'rgba(200, 200, 222, 0.2)'
+                    else:
+                        name_node_color = 'rgba(22,22,22, 1s)'
                     
                     G.add_node(node_name, color=name_node_color, size=node_size)
-                    G.add_node(node_company, color='rgb(200,200,222)')
+                    G.add_node(node_company, color='rgba(180,150,150,0.8)')
                     G.add_edge(node_name, node_company)
 
                 fig = pyvis.network.Network(width=1000, directed=False)
