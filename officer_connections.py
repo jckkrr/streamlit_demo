@@ -123,8 +123,6 @@ def getCompanyPeople(company_numbers):
     
     for company_number in company_numbers:
         
-        st.write(company_number)
-        
         dfC = pd.DataFrame()
         
         company_name = None
@@ -134,6 +132,7 @@ def getCompanyPeople(company_numbers):
         if 'company_name' in company_name_js.keys():
             company_name = company_name_js['company_name']
         
+        st.write(company_number, company_name)
         
         ### Get Officers ###
 
@@ -273,7 +272,7 @@ if len(api_key) > 10:
 
                 st.write('Searching for who is involved with these companies:')
                 
-                st.dataframe(dfAPPOINTMENTS)
+                #st.dataframe(dfAPPOINTMENTS)
 
                 dfCOMPANYPEOPLE = getCompanyPeople(company_numbers)
                 
