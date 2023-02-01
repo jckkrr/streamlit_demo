@@ -229,7 +229,7 @@ api_key = '675a16ec-fb59-4570-a69c-30dd389a0ed7'
 
 if len(api_key) > 10:
 
-    search_term = st.text_input('Who would like to search for?', 'lydia alexandra gordon')  # lydia alexandra gordon
+    search_term = st.text_input('Who would like to search for?', 'josh landy')  # lydia alexandra gordon
 
     if len(search_term) > 0:
 
@@ -324,7 +324,7 @@ if len(api_key) > 10:
 
                     components.html(HtmlFile.read(), height=560)
 
-                    st.write(G.nodes)
+                    #st.write(G.nodes)
                     
                 makePlot(dfCOMPANYPEOPLE, 'company_name')
                     
@@ -338,7 +338,7 @@ if len(api_key) > 10:
                 st.write('Looking for businesses of the associates:')
                 
                 dfSECONDRINGBUSINESSES = getInnerCircle(dfCOMPANYPEOPLE)
-                st.dataframe(dfSECONDRINGBUSINESSES)
+                #st.dataframe(dfSECONDRINGBUSINESSES)
                 
                 dfPLOT = pd.concat([dfCOMPANYPEOPLE, dfSECONDRINGBUSINESSES.rename(columns={'appointed_to:company_name':'company_name'})])
                 dfPLOT['name'] = np.where(dfPLOT['name'].str.contains(','), dfPLOT['name'], dfPLOT['name'] + ', ')
@@ -352,7 +352,8 @@ if len(api_key) > 10:
                 st.dataframe(dfPLOT)
                 
                 st.write('')
-                st.write('This is the basic version of our UKCH Network Mapper. Want the more advanced option ([like this](https://constituent.au/data_visualisations/uk_companies_house_network_mapper_5309709_8081703_FC034703_04241161_05751462.html))?')
+                st.write('This is only the beginning of what we offer.')
+                st.write('Want to see a more advanced option of the ([UKCH Network Mapper](https://constituent.au/data_visualisations/uk_companies_house_network_mapper_5309709_8081703_FC034703_04241161_05751462.html))?')
                 st.write('Just email us the company IDs you are after and we will get back to you.')
                 st.write('studio@constituent.au')
                 
