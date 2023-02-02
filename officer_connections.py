@@ -8,6 +8,11 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
+headers = {
+    "api_key" = st.secrets['api_key'],
+    "content-type": "application/json"
+}
+
 ### functions
 
 def unpack_json_into_dataframe(v):
@@ -216,7 +221,6 @@ st.write('Find which other people are a business director is connected to in the
 st.write('This tool uses the UKCH API to find an individual, all the businesses they are an officer of and all other officers involved in those business.')
 
 #api_key = st.text_input('Please enter API key')
-api_key = st.secrets('api_key')
 
 if len(api_key) > 10:
 
