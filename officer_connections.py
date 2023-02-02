@@ -9,7 +9,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 headers = {
-    "api_key" = st.secrets['api_key'],
+    "api_key": st.secrets['api_key'],
     "content-type": "application/json"
 }
 
