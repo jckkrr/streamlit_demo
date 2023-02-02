@@ -221,6 +221,7 @@ st.write('Find which other people are a business director is connected to in the
 st.write('This tool uses the UKCH API to find an individual, all the businesses they are an officer of and all other officers involved in those business.')
 
 #api_key = st.text_input('Please enter API key')
+api_key = headers["api_key"]
 
 if len(api_key) > 10:
 
