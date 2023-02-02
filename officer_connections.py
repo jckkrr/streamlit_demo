@@ -6,6 +6,7 @@ from requests import get
 import re
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 ### functions
 
@@ -18,7 +19,6 @@ def unpack_json_into_dataframe(v):
         if isinstance(v, dict):
             for k, v2 in v.items():
                 p2 = "{}['{}']".format(prefix, k)
-
                 px = re.findall("(\w+)",p2)
                 px = ':'.join(px).strip()
 
@@ -27,7 +27,6 @@ def unpack_json_into_dataframe(v):
         elif isinstance(v, list):
             for i, v2 in enumerate(v):
                 p2 = "{}[{}]".format(prefix, i)
-
                 pn = re.findall("\[(.*)\]",p2)[0]
                 px = re.sub("\[(.*)\]", f':{pn}', p2)
 
@@ -42,37 +41,84 @@ def unpack_json_into_dataframe(v):
     
     return df
 
-###
+
+############################
+####### SUBFUNCTIONS #######
+############################
+
+#### Access the data from the UK Companies House REST API
+def getJS(search_url, params):
+    company_response = requests.get(search_url, auth=(api_key, ''), params=params)
+    js = company_response.json() 
+    return js
+
+def miniUnpack(df, js, selected_columns):
+            
+    ### Unpack a few specific keys/values
+    for key in [key for key in selected_columns if key in js.keys()]:
+        if type(js[key]) == dict:
+            for subkey in js[key].keys():
+                df[f'{key.strip()}:{subkey.strip()}'] = js[key][subkey]
+        else:
+            df[key.strip()] = js[key]
+                    
+    return df
+    
+### For ease of analysis, assign all NaN birth values to 0, make all birth values integers
+def updateBirthDateDetails(df):
+    for column in [column for column in ['date_of_birth:year', 'date_of_birth:month'] if column in df.columns]:
+        df[column] = df[column].fillna(0).astype(int)
+    return df
+
+## for sorting out active statuses
+def getActiveStatus(df):
+    for column in [column for column in ['appointed_on', 'resigned_on'] if column not in df.columns]:
+        df[column] = None
+    df['active'] = np.where(df['appointed_on'].isnull() & df['resigned_on'].isnull(), -1, np.where(df['appointed_on'].notnull() & df['resigned_on'].isnull(), 1, 0))       
+    return df
+
+## for neating dataframe at end
+def orderColumns(df, first_columns, exclude_columns):        
+    ordered_columns = [x for x in first_columns if x in df.columns] + [x for x in df.columns if x not in first_columns and x not in exclude_columns]
+    return df[ordered_columns]
+
+
+
+##################################
+####### PRIMARY FUNCTIONS #######
+##################################
 
 def findPersonListings(search_term):
     
-    search_url = f"https://api.company-information.service.gov.uk/search/officers"
-    params={'q':search_term}
-    company_response = requests.get(search_url, auth=(api_key, ''), params=params)
-    js = company_response.json() 
-            
     df = pd.DataFrame()
-    for item in js['items']:
-        dfx = unpack_json_into_dataframe(item)
-        df = pd.concat([df,dfx])
-    df = df.reset_index(drop=True)
     
-    try:
-        df['officer_id'] = df['links:self'].apply(lambda x: re.findall('/officers/(.*)/appoint',x)[0]) #.group(1)
-    except:
-        df['officer_id'] = 'X'
+    ### Get data from UKCH API
+    js = getJS(f"https://api.company-information.service.gov.uk/search/officers", {'q':search_term, 'items_per_page': '100'})
     
-    df['date_of_birth:year'] = df['date_of_birth:year'].fillna('0')
-    df['date_of_birth:month'] = df['date_of_birth:month'].fillna('0')
-    df['address_short'] = df.apply(lambda x: x['address_snippet'].split(x['address:locality'])[0][:-2], axis=1)
+    ### Unpack each line and concatenate it
+    ### Uses the "unpack..." function, as each item has nested values
+    for item in js['items']:        
+        df = pd.concat([df,unpack_json_into_dataframe(item)]).reset_index(drop=True)
+    
+    ### Extract the Officer ID from the link column 
+    df['officer_id'] = df['links:self'].apply(lambda x: re.findall('/officers/(.*)/appoint',x)[0]) #.group(1)
+        
+    df = updateBirthDateDetails(df)
+        
+    ### From the "address snippet", extract the address data up to the locality, which gets its own column.
+    for column in ['address:locality']:
+        df[column] = df[column].fillna('NONE')    
+    df['address_short'] = df.apply(lambda x: x['address_snippet'].split(x['address:locality'])[0].strip(), axis=1)
+    df['address_short'] = np.where(df['address_short'].str[-1] == ',', df['address_short'].str[:-1], df['address_short'])  ## get rid of trailing comma
+    
     df['kind'] = np.where(df['kind'].str.contains('#'), df['kind'].apply(lambda x : re.findall('#(.*)', x)[0]), df['kind'])
-    first_cols = ['title', 'date_of_birth:year', 'date_of_birth:month', 'address_short', 'address:locality', 'address:country', 'appointment_count', 'kind', 'officer_id',]
-    exclude_cols = [x for x in df.columns if 'address' in x and x not in first_cols] + [x for x in df.columns if 'matches' in x] + [x for x in df.columns if 'description' in x]  + ['snippet']
-    ordered_cols = [x for x in first_cols if x in df.columns] + [x for x in df.columns if x not in first_cols and x not in exclude_cols]
-    df = df[ordered_cols]
+    
+    ### Neaten
+    first_columns = ['title', 'address_short', 'address:locality', 'address:country', 'date_of_birth:year', 'date_of_birth:month', 'appointment_count', 'kind', 'officer_id',]
+    exclude_columns = [x for x in df.columns if 'address' in x and x not in first_columns] + [x for x in df.columns if 'matches' in x] + [x for x in df.columns if 'description' in x]  + ['snippet']
+    df = orderColumns(df, first_columns, exclude_columns)
     
     return df
-
 
 #####
 
@@ -80,39 +126,24 @@ def getOfficerAppointments(officer_ids):
     
     df = pd.DataFrame()
     
+    #### Access the data from the UK Companies House REST API
     for officer_id in officer_ids:
-
-        url = f'https://api.company-information.service.gov.uk/officers/{officer_id}/appointments'
-        response = requests.get(url, auth=(api_key, ''))
-        js = response.json()
-
-
-        for item in js['items']:
+        js = getJS(f'https://api.company-information.service.gov.uk/officers/{officer_id}/appointments', {}) # params is empty
+        for item in js['items']:   ### Unpack each line and concatenate it. Plus add officer id to each subdf before concatting it
             dfx = unpack_json_into_dataframe(item)
-            dfx['officer_id'] = officer_id    
-            df = pd.concat([df,dfx])
-
+            dfx['officer_id'] = officer_id                  
+            df = pd.concat([df,dfx])     
         df = df.reset_index(drop=True)
-
-        for key in ['date_of_birth', 'kind', 'is_corporate_officer', 'links']:        
-            if key in js.keys():            
-                if type(js[key]) == dict:
-                    for subkey in js[key].keys():
-                        df[f'{key.strip()}:{subkey.strip()}'] = js[key][subkey]
-                else:
-                    df[key.strip()] = js[key]
-                    
-        for col in ['date_of_birth:year', 'date_of_birth:month']:
-            if col in df.columns:
-                df[col] = df[col].fillna(0)
-                df[col] = df[col].astype(int)
-
-        first_cols = ['name', 'appointed_to:company_name', 'appointed_on', 'appointed_to:company_number', 'officer_role', 'date_of_birth:year', 'date_of_birth:month', 'nationality', 'occupation', 'officer_id'] + [x for x in df.columns if 'address' in x]
-        ordered_cols = [x for x in first_cols if x in df.columns] + [x for x in df.columns if x not in first_cols]
-        df = df[ordered_cols]
-    
+                        
+        df = miniUnpack(df, js, ['date_of_birth', 'kind', 'is_corporate_officer', 'links'])    
+          
+    ### Final updates and tidy up
+    df = updateBirthDateDetails(df)
+    df = getActiveStatus(df)
+    first_columns = ['name', 'appointed_to:company_name', 'nationality', 'date_of_birth:year', 'date_of_birth:month', 'address:locality', 'address:country', 'active', 'appointed_on', 'resigned_on', 'officer_role', 'occupation', 'officer_id', 'appointed_to:company_number'] + [x for x in df.columns if 'address' in x]
+    df = orderColumns(df, first_columns, [])
+            
     return df
-
 
 ####
 
@@ -131,8 +162,6 @@ def getCompanyPeople(company_numbers):
         company_name_js = company_name_response.json()  
         if 'company_name' in company_name_js.keys():
             company_name = company_name_js['company_name']
-        
-        st.write(company_number, company_name)
         
         ### Get Officers ###
 
@@ -166,54 +195,16 @@ def getCompanyPeople(company_numbers):
     df['officer_id'] = np.where(df['links:officer:appointments'].isnull(), '/officers/*****/appointments', df['links:officer:appointments'])
     df['officer_id'] = np.where(df['officer_id'].str.contains('appointments'), df['officer_id'].apply(lambda x: re.findall('/officers/(.*)/appointments', str(x))[0]), None)
     df['officer_id'] = np.where(df['officer_id']=='*****', None, df['officer_id'])
-            
-    df['active'] = np.where(df['appointed_on'].notnull() & df['resigned_on'].isnull(), 1, 0)
-            
-    ordered_columns = [x for x in first_columns if x in df.columns] + [x for x in df.columns if x not in first_columns]    
-    df = df[ordered_columns].reset_index(drop=True)
+                
+    ### Final updates and tidy up
+    df = updateBirthDateDetails(df)
+    df = getActiveStatus(df)
+    df = orderColumns(df, first_columns, [])   
+    df = df.reset_index(drop=True)
+    
+    df.to_csv('test.csv', index=False)
     
     return df
-
-### RETURN THE OTHER BUSINESSES OF ALL IN THE INNER CIRCLE
-
-def getInnerCircle(dfCOMPANYPEOPLE):
-    
-    dfINNERCIRCLE = dfCOMPANYPEOPLE[['name', 'date_of_birth:year', 'date_of_birth:month']].drop_duplicates()
-    dfINNERCIRCLE['name'] = np.where(dfINNERCIRCLE['name'].str.contains(','), dfINNERCIRCLE['name'], dfINNERCIRCLE['name'] + ', ')
-    dfINNERCIRCLE['name'] = dfINNERCIRCLE['name'].apply(lambda x: x.split(',')[1] + ' ' + x.split(',')[0]).str.strip()
-
-    dfIDS = pd.DataFrame()
-    for index, row in dfINNERCIRCLE.iterrows():
-
-        name, birth_year, birth_month = row['name'], row['date_of_birth:year'], row['date_of_birth:month']    
-        #st.write(name, f'{birth_month}/{birth_year}', end=' ')
-
-        try:
-
-            inner_circle_officer_df = findPersonListings(name)
-            inner_circle_officer_df = inner_circle_officer_df.loc[(inner_circle_officer_df['date_of_birth:year']==birth_year) & (inner_circle_officer_df['date_of_birth:month']==birth_month)]
-            inner_circle_officer_df = inner_circle_officer_df.rename(columns={'title':'name'})
-
-            dfIDS = pd.concat([dfIDS, inner_circle_officer_df])
-
-        except:
-            pass #st.write('!')
-
-    dfINNERCIRCLE = dfINNERCIRCLE.merge(dfIDS, how='outer')
-    
-    inner_officer_ids = [x for x in dfINNERCIRCLE['officer_id'] if pd.notnull(x)]
-    
-    dfSECONDRINGBUSINESSES = getOfficerAppointments(inner_officer_ids)
-    
-    if 'resigned_on' not in dfSECONDRINGBUSINESSES.columns:
-        dfSECONDRINGBUSINESSES['resigned_on'] = None
-    dfSECONDRINGBUSINESSES['active'] = np.where(dfSECONDRINGBUSINESSES['appointed_on'].notnull() & dfSECONDRINGBUSINESSES['resigned_on'].isnull(), 1, 0)
-    
-    first_cols = ['name', 'appointed_to:company_name', 'appointed_on', 'appointed_to:company_number', 'officer_role', 'date_of_birth:year', 'date_of_birth:month', 'nationality', 'occupation', 'officer_id'] + [x for x in dfSECONDRINGBUSINESSES.columns if 'address' in x]
-    ordered_cols = [x for x in first_cols if x in dfSECONDRINGBUSINESSES.columns] + [x for x in dfSECONDRINGBUSINESSES.columns if x not in first_cols]
-    dfSECONDRINGBUSINESSES = dfSECONDRINGBUSINESSES[ordered_cols]
-        
-    return dfSECONDRINGBUSINESSES
 
 ##################################################
 
@@ -229,19 +220,23 @@ api_key = '675a16ec-fb59-4570-a69c-30dd389a0ed7'
 
 if len(api_key) > 10:
 
-    search_term = st.text_input('Who would like to search for?', 'josh landy')  # lydia alexandra gordon
+    search_term = st.text_input('Who would like to search for?', 'edward sheringham')  # 'josh landy' lydia alexandra gordon 'simon pearce'
 
     if len(search_term) > 0:
 
         dfSEARCH = findPersonListings(search_term)
-        
         dfDISPLAY = dfSEARCH
-        
+                
         opening_display_year = dfDISPLAY.loc[0, 'date_of_birth:year']
+        opening_display_month = dfDISPLAY.loc[0, 'date_of_birth:month']
         display_year_options = sorted(dfSEARCH['date_of_birth:year'].unique())
-        birth_year = st.selectbox('Filter by birth year:', display_year_options, display_year_options.index(opening_display_year))        
-        birth_month = st.selectbox('Filter by birth month:', sorted(dfSEARCH.loc[dfSEARCH['date_of_birth:year'] == birth_year, 'date_of_birth:month'].unique()))
-    
+        birth_year = st.selectbox('Selected birth year:', display_year_options, display_year_options.index(opening_display_year))    
+        
+        display_month = sorted(dfSEARCH.loc[dfSEARCH['date_of_birth:year'] == birth_year, 'date_of_birth:month'].unique()).index(opening_display_month) if birth_year == opening_display_year else 0
+        birth_month = st.selectbox('Selected birth month:', 
+                                   sorted(dfSEARCH.loc[dfSEARCH['date_of_birth:year'] == birth_year, 'date_of_birth:month'].unique()), 
+                                  display_month)
+        
         dfDISPLAY = dfSEARCH.loc[(dfSEARCH['date_of_birth:year'].isin([birth_year])) & (dfSEARCH['date_of_birth:month'].isin([birth_month]))]
         st.dataframe(dfDISPLAY)
         
@@ -251,9 +246,7 @@ if len(api_key) > 10:
             'Individuals frequently have multiple officer identification numbers in the UK Companies House database. We aren\'t sure why either.\n\nIn any case, these are the rows from the spreadsheet above that we will look for, based on what you have enetered above.', 
             [x for x in range(0,dfSEARCH.shape[0])], 
             filter_year_month_index)
-        
-        #st.dataframe(dfSEARCH.loc[(dfSEARCH['date_of_birth:year'] == birth_year) & (dfSEARCH['date_of_birth:month'] == birth_month)])
-        
+                
         proceed = st.radio('Ready to go?', ['no', 'yes'], horizontal=True)
 
         if proceed == 'yes':
@@ -266,7 +259,7 @@ if len(api_key) > 10:
 
             dfAPPOINTMENTS = getOfficerAppointments(officer_ids)
             
-            company_numbers = dfAPPOINTMENTS['appointed_to:company_number']
+            company_numbers = dfAPPOINTMENTS['appointed_to:company_number'].unique()
 
             if len(company_numbers) > 0:
 
@@ -283,11 +276,75 @@ if len(api_key) > 10:
 
                 st.write('These are the people connected to the person(s) who searched for:')
                 
+                ######################
+                
+                import plotly.graph_objects as go
+                from pyvis.network import Network
+                import pyvis
+                import math 
+                
+                def makePlotPYVIS(df, company_name_column):
+                                        
+                    dfPLOT = df.copy()
+                    dfPLOT['name'] = np.where(dfPLOT['name'].str.contains(','), dfPLOT['name'], dfPLOT['name'] + ', ')
+                    dfPLOT['name'] = dfPLOT['name'].apply(lambda x: x.split(',')[1] + ' ' + x.split(',')[0]).str.upper().str.strip()
+                    
+                    for index, row in dfPLOT.iterrows():
+                        name = row['name']
+                        if name.split(' ')[0] in ['MRS', 'MS', 'MISS', 'MR']:
+                            dfPLOT.loc[index, 'name'] = ' '.join(name.split(' ')[1:])
+                                                        
+                    g = Network(height=1500, width=800, notebook=True, directed=False)
+                    
+                    ### Add person nodes
+                    for index, row in dfPLOT.iterrows():
+                                            
+                        source, target = row['name'], row[company_name_column]
+                    
+                        ### Add person nodes
+                        node_size = 10
+                        node_shape = 'dot'
+                        if row['officer_id'] in officer_ids:
+                            node_size = 25
+                            node_color = 'rgba(200, 200, 0, 0.8)'
+                            node_shape = 'circularImage'
+                            node_image = 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ0D8RJLIfGu9BfAEv3oMYyxiGfkGsGABeSsY6K2Ugy&s'
+                        elif row['active'] == 1:
+                            node_color = 'rgba(125, 125, 222, 0.6)'
+                        elif row['active'] == -1:
+                            node_color = 'rgba(125, 125, 222, 0.4)'
+                        elif row['active'] == 0:
+                            node_color = 'rgba(125, 125, 222, 0.2)'
+                        else:
+                            node_color = 'rgba(0, 0, 0, 1)' 
+                         
+                        g.add_node(source, color=node_color, size=node_size, shape = 'dot', title=source, font=(f'12 Manrope rgba(22,22,22,1)'))
+
+                        ### company nodes
+                        target_node_size = 10
+                        target_node_color = 'rgba(0, 150, 100, 0.5)'
+                        g.add_node(target, color=target_node_color, size=target_node_size, shape='dot', title=target, font=(f'12 Manrope rgba(22,22,22,1)'),)
+                        
+                        g.add_edge(source, target, weight=5, title='x', color='black')
+                    
+                    
+                    ### display
+                    path = '/tmp'
+                    g.save_graph(f'temp.html')
+                    HtmlFile = open(f'temp.html', 'r', encoding='utf-8')
+                    components.html(HtmlFile.read(), height=550, width=700)
+                    
+                makePlotPYVIS(dfCOMPANYPEOPLE, 'company_name')
+                
+                
+                
+                
+                
                 ############### VISUALISE ############################
                 
                 import plotly.graph_objects as go
                 import networkx as nx
-                import streamlit.components.v1 as components
+                
                 import pyvis
                              
                     
@@ -299,7 +356,6 @@ if len(api_key) > 10:
                         node_name, node_company = row['name'], row[company_name_column]
 
                         node_size = 10
-
                         if row['officer_id'] in officer_ids:
                             node_size = 25
                             name_node_color = 'rgba(200, 200, 0, 0.8)'
@@ -313,8 +369,8 @@ if len(api_key) > 10:
                         G.add_node(node_name, color=name_node_color, size=node_size)
                         G.add_node(node_company, color='rgba(180,150,150,0.8)')
                         G.add_edge(node_name, node_company)
-
-                    fig = pyvis.network.Network(width=1000, directed=False)
+                        
+                    fig = pyvis.network.Network(height= 700, width=700, directed=False)
 
                     fig.from_nx(G)
 
@@ -322,34 +378,32 @@ if len(api_key) > 10:
                     fig.save_graph(f'temp.html')
                     HtmlFile = open(f'temp.html', 'r', encoding='utf-8')
 
-                    components.html(HtmlFile.read(), height=560)
-
-                    #st.write(G.nodes)
+                    components.html(HtmlFile.read(), height=700, width=700)
                     
-                makePlot(dfCOMPANYPEOPLE, 'company_name')
+                #makePlot(dfCOMPANYPEOPLE, 'company_name')
                     
                 #################################
                 
                 st.write('More details:')
                 st.dataframe(dfCOMPANYPEOPLE)
                 
-                st.write('')
-                st.write('')
-                st.write('Looking for businesses of the associates:')
+                #st.write('')
+                #st.write('')
+                #st.write('Looking for businesses of the associates:')
                 
-                dfSECONDRINGBUSINESSES = getInnerCircle(dfCOMPANYPEOPLE)
+                #dfSECONDRINGBUSINESSES = getInnerCircle(dfCOMPANYPEOPLE)
                 #st.dataframe(dfSECONDRINGBUSINESSES)
                 
-                dfPLOT = pd.concat([dfCOMPANYPEOPLE, dfSECONDRINGBUSINESSES.rename(columns={'appointed_to:company_name':'company_name'})])
-                dfPLOT['name'] = np.where(dfPLOT['name'].str.contains(','), dfPLOT['name'], dfPLOT['name'] + ', ')
-                dfPLOT['name'] = dfPLOT['name'].apply(lambda x: x.split(',')[1] + ' ' + x.split(',')[0]).str.strip()
+                #dfPLOT = pd.concat([dfCOMPANYPEOPLE, dfSECONDRINGBUSINESSES.rename(columns={'appointed_to:company_name':'company_name'})])
+                #dfPLOT['name'] = np.where(dfPLOT['name'].str.contains(','), dfPLOT['name'], dfPLOT['name'] + ', ')
+                #dfPLOT['name'] = dfPLOT['name'].apply(lambda x: x.split(',')[1] + ' ' + x.split(',')[0]).str.strip()
                 #dfPLOT['name'] = np.where(dfPLOT['name'][0:2] == 'Mr', dfPLOT['name'][2:], dfPLOT['name'])
-                dfPLOT['name'] = dfPLOT['name'].str.upper()
+                #dfPLOT['name'] = dfPLOT['name'].str.upper()
                 
                     
-                makePlot(dfPLOT, 'company_name')
+                #makePlot(dfPLOT, 'company_name')
                 
-                st.dataframe(dfPLOT)
+                #st.dataframe(dfPLOT)
                 
                 st.write('')
                 st.write('This is only the beginning of what we offer.')
